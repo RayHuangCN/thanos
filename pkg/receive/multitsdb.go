@@ -10,6 +10,7 @@ import (
 	"path"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
@@ -183,9 +184,9 @@ func (t *MultiTSDB) Close() error {
 	return merr.Err()
 }
 
-func (t *MultiTSDB) Sync(ctx context.Context) error {
+func (t *MultiTSDB) Sync(ctx context.Context) (uploaded int64, _ error) {
 	if t.bucket == nil {
-		return errors.New("bucket is not specified, Sync should not be invoked")
+		return 0, errors.New("bucket is not specified, Sync should not be invoked")
 	}
 
 	t.mtx.RLock()
@@ -202,16 +203,18 @@ func (t *MultiTSDB) Sync(ctx context.Context) error {
 		}
 		wg.Add(1)
 		go func() {
-			if uploaded, err := s.Sync(ctx); err != nil {
+			up, err := s.Sync(ctx)
+			if err != nil {
 				errmtx.Lock()
 				merr.Add(errors.Wrapf(err, "upload %d", uploaded))
 				errmtx.Unlock()
 			}
+			atomic.AddInt64(&uploaded, int64(up))
 			wg.Done()
 		}()
 	}
 	wg.Wait()
-	return merr.Err()
+	return uploaded, merr.Err()
 }
 
 func (t *MultiTSDB) RemoveLockFilesIfAny() error {
